@@ -104,3 +104,73 @@ fn looks_like_version_attempt(s: &str) -> bool {
     let mut chars = s.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_digit()) && s.contains('.')
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_version_produces_no_finding() {
+        assert!(lint_line(1, "release 1.2.3 is out").is_empty());
+    }
+
+    #[test]
+    fn invalid_version_is_reported_with_location() {
+        let findings = lint_line(7, "bumped to 1.02.0 today");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].line, 7);
+        assert_eq!(findings[0].column, 11);
+        assert_eq!(findings[0].token, "1.02.0");
+        assert!(findings[0].message.contains("leading zero"));
+    }
+
+    #[test]
+    fn v_prefix_is_stripped_before_validating_but_kept_in_token() {
+        let findings = lint_line(1, "see v1.2.3.4 for details");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].token, "v1.2.3.4");
+        assert!(findings[0].message.contains("too many components"));
+    }
+
+    #[test]
+    fn capital_v_prefix_is_also_stripped() {
+        assert!(lint_line(1, "tag V1.2.3").is_empty());
+    }
+
+    #[test]
+    fn words_without_a_dot_are_ignored() {
+        assert!(lint_line(1, "build 42 succeeded").is_empty());
+    }
+
+    #[test]
+    fn words_not_starting_with_a_digit_are_ignored() {
+        // "beta.1" doesn't start with a digit, so it's skipped outright even
+        // though it contains a dot.
+        assert!(lint_line(1, "prefix beta.1 suffix").is_empty());
+    }
+
+    #[test]
+    fn multiple_findings_on_one_line_report_distinct_columns() {
+        let findings = lint_line(3, "1.02.0 then 2.0.0-beta_1");
+        assert_eq!(findings.len(), 2);
+        assert_eq!(findings[0].column, 1);
+        assert_eq!(findings[1].column, 13);
+    }
+
+    #[test]
+    fn ip_address_shaped_tokens_are_flagged_as_a_known_false_positive() {
+        // Documents current behavior: nothing distinguishes an IP address
+        // from a version core yet, so a fourth octet trips TooManyCoreComponents.
+        let findings = lint_line(1, "connect to 192.168.1.1 first");
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("too many components"));
+    }
+
+    #[test]
+    fn trailing_punctuation_is_excluded_from_the_token() {
+        let findings = lint_line(1, "see (1.02.0).");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].token, "1.02.0");
+        assert_eq!(findings[0].column, 6);
+    }
+}

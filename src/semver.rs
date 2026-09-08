@@ -150,3 +150,146 @@ fn validate_dotted_identifiers(s: &str, is_prerelease: bool) -> Result<(), Semve
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_plain_core() {
+        let v = parse("1.2.3").unwrap();
+        assert_eq!(v.major, 1);
+        assert_eq!(v.minor, 2);
+        assert_eq!(v.patch, 3);
+        assert_eq!(v.pre_release, None);
+        assert_eq!(v.build, None);
+    }
+
+    #[test]
+    fn parses_all_zeros() {
+        let v = parse("0.0.0").unwrap();
+        assert_eq!((v.major, v.minor, v.patch), (0, 0, 0));
+    }
+
+    #[test]
+    fn parses_prerelease_and_build() {
+        let v = parse("1.2.3-alpha.1+build.5").unwrap();
+        assert_eq!(v.pre_release.as_deref(), Some("alpha.1"));
+        assert_eq!(v.build.as_deref(), Some("build.5"));
+    }
+
+    #[test]
+    fn prerelease_alphanumeric_identifier_may_have_leading_zero() {
+        // Only identifiers made entirely of digits are numeric for the
+        // leading-zero rule; "0a" contains a letter so it's exempt.
+        assert!(parse("1.2.3-0a").is_ok());
+    }
+
+    #[test]
+    fn build_numeric_identifier_may_have_leading_zero() {
+        assert!(parse("1.2.3+007").is_ok());
+    }
+
+    #[test]
+    fn rejects_empty_input() {
+        assert_eq!(parse(""), Err(SemverError::Empty));
+    }
+
+    #[test]
+    fn rejects_missing_minor() {
+        assert_eq!(parse("1"), Err(SemverError::MissingMinor));
+    }
+
+    #[test]
+    fn rejects_missing_patch() {
+        assert_eq!(parse("1.2"), Err(SemverError::MissingPatch));
+    }
+
+    #[test]
+    fn rejects_too_many_core_components() {
+        assert_eq!(parse("1.2.3.4"), Err(SemverError::TooManyCoreComponents));
+    }
+
+    #[test]
+    fn rejects_empty_numeric_identifier() {
+        assert_eq!(parse("1..3"), Err(SemverError::EmptyNumericIdentifier));
+    }
+
+    #[test]
+    fn rejects_non_numeric_core() {
+        assert_eq!(
+            parse("1.x.0"),
+            Err(SemverError::NonNumericCore("x".to_string()))
+        );
+    }
+
+    #[test]
+    fn rejects_leading_zero_in_core() {
+        assert_eq!(
+            parse("1.02.0"),
+            Err(SemverError::LeadingZero("02".to_string()))
+        );
+    }
+
+    #[test]
+    fn accepts_lone_zero_component() {
+        // A single "0" is not a leading zero.
+        assert!(parse("1.0.3").is_ok());
+    }
+
+    #[test]
+    fn rejects_number_too_large() {
+        let huge = "18446744073709551616"; // u64::MAX + 1
+        assert_eq!(
+            parse(&format!("{huge}.0.0")),
+            Err(SemverError::NumberTooLarge(huge.to_string()))
+        );
+    }
+
+    #[test]
+    fn rejects_empty_prerelease() {
+        assert_eq!(parse("1.2.3-"), Err(SemverError::EmptyPrerelease));
+    }
+
+    #[test]
+    fn rejects_empty_build() {
+        assert_eq!(parse("1.2.3+"), Err(SemverError::EmptyBuild));
+    }
+
+    #[test]
+    fn rejects_empty_identifier_between_dots_in_prerelease() {
+        assert_eq!(
+            parse("1.2.3-alpha..1"),
+            Err(SemverError::EmptyIdentifier)
+        );
+    }
+
+    #[test]
+    fn rejects_empty_identifier_between_dots_in_build() {
+        assert_eq!(parse("1.2.3+a..b"), Err(SemverError::EmptyIdentifier));
+    }
+
+    #[test]
+    fn rejects_invalid_prerelease_char() {
+        assert_eq!(
+            parse("1.2.3-beta_1"),
+            Err(SemverError::InvalidPrereleaseChar("beta_1".to_string()))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_build_char() {
+        assert_eq!(
+            parse("1.2.3+beta_1"),
+            Err(SemverError::InvalidBuildChar("beta_1".to_string()))
+        );
+    }
+
+    #[test]
+    fn rejects_leading_zero_in_numeric_prerelease_identifier() {
+        assert_eq!(
+            parse("1.2.3-01"),
+            Err(SemverError::LeadingZero("01".to_string()))
+        );
+    }
+}
