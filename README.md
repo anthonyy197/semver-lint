@@ -41,10 +41,15 @@ numeric core identifiers with no leading zeros, pre-release identifiers
 restricted to alphanumerics and hyphens, and build metadata that can
 contain leading zeros but nothing else non-alphanumeric.
 
-That heuristic is intentionally loose, which means it will also flag
-dotted numbers that aren't versions at all - IP addresses, dates written
-as `2024.01.05`, and the like. Narrowing that down without missing real
-versions is ongoing work; see the roadmap.
+That heuristic is intentionally loose, so two common dotted-number shapes
+get an explicit carve-out before the semver check ever runs: dotted-quad
+IPv4 addresses (`192.168.1.1`) and `YYYY.MM.DD` calendar dates (with or
+without a trailing build number, like `2024.01.05.1`). Either carve-out is
+skipped if the token has a `v`/`V` prefix, since that's a deliberate signal
+that the author meant a version. Anything else that starts with a digit
+and contains a dot still gets checked, so unusual but genuine calendar
+versioning (`2024.1.5`, no zero-padding) is validated as a normal semver
+core.
 
 ## Streaming
 

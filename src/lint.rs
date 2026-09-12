@@ -48,6 +48,13 @@ fn lint_line(line_no: usize, line: &str) -> Vec<Finding> {
         if !looks_like_version_attempt(candidate) {
             continue;
         }
+        // A `v`/`V` prefix is a deliberate signal that the author meant a
+        // version, so only apply the IP/date carve-outs to bare tokens.
+        let has_v_prefix = candidate.len() != token.len();
+        if !has_v_prefix && (looks_like_ip_address(candidate) || looks_like_calendar_date(candidate))
+        {
+            continue;
+        }
         if let Err(err) = semver::parse(candidate) {
             findings.push(Finding {
                 line: line_no,
@@ -98,11 +105,48 @@ fn strip_v_prefix(token: &str) -> &str {
 /// Heuristic gate so we don't try to parse every stray word in a line: a
 /// candidate must start with a digit and contain at least one dot, which
 /// covers the shapes semver strings actually take while skipping plain
-/// prose. It will also flag non-semver dotted numbers (IP addresses, dates
-/// written as 2024.01.05.1) - see README for known false positives.
+/// prose. Some non-version dotted numbers still slip through this gate -
+/// IP addresses and calendar dates are filtered out separately below.
 fn looks_like_version_attempt(s: &str) -> bool {
     let mut chars = s.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_digit()) && s.contains('.')
+}
+
+/// Recognizes dotted-quad IPv4 addresses: exactly four dot-separated
+/// groups of one to three digits, each in 0..=255. These are common in
+/// logs and config examples and would otherwise trip `TooManyCoreComponents`.
+fn looks_like_ip_address(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    parts.len() == 4 && parts.iter().all(|p| is_octet(p))
+}
+
+fn is_octet(p: &str) -> bool {
+    !p.is_empty()
+        && p.len() <= 3
+        && p.bytes().all(|b| b.is_ascii_digit())
+        && p.parse::<u16>().is_ok_and(|n| n <= 255)
+}
+
+/// Recognizes `YYYY.MM.DD`, optionally followed by more numeric components
+/// (e.g. a same-day build number). Calendar dates written this way are
+/// usually zero-padded, which reads as a leading-zero semver violation even
+/// though nobody meant it as a version.
+fn looks_like_calendar_date(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() < 3 {
+        return false;
+    }
+    let year_ok = parts[0].len() == 4
+        && parts[0].bytes().all(|b| b.is_ascii_digit())
+        && parts[0].parse::<u32>().is_ok_and(|y| (1900..=2099).contains(&y));
+    year_ok && in_range(parts[1], 1, 12) && in_range(parts[2], 1, 31)
+}
+
+fn in_range(p: &str, min: u32, max: u32) -> bool {
+    !p.is_empty()
+        && p.len() <= 2
+        && p.bytes().all(|b| b.is_ascii_digit())
+        && p.parse::<u32>().is_ok_and(|n| n >= min && n <= max)
 }
 
 #[cfg(test)]
@@ -158,12 +202,44 @@ mod tests {
     }
 
     #[test]
-    fn ip_address_shaped_tokens_are_flagged_as_a_known_false_positive() {
-        // Documents current behavior: nothing distinguishes an IP address
-        // from a version core yet, so a fourth octet trips TooManyCoreComponents.
-        let findings = lint_line(1, "connect to 192.168.1.1 first");
+    fn ip_address_shaped_tokens_are_skipped() {
+        assert!(lint_line(1, "connect to 192.168.1.1 first").is_empty());
+    }
+
+    #[test]
+    fn ip_address_octet_out_of_range_is_still_checked_as_a_version() {
+        // 999 can't be an IPv4 octet, so this falls through to normal
+        // semver validation and gets flagged for the extra component.
+        let findings = lint_line(1, "seen 999.168.1.1 in the wild");
         assert_eq!(findings.len(), 1);
         assert!(findings[0].message.contains("too many components"));
+    }
+
+    #[test]
+    fn v_prefixed_dotted_quad_is_still_checked_as_a_version() {
+        // A `v` prefix means the author meant a version, not an address.
+        let findings = lint_line(1, "see v192.168.1.1 for details");
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("too many components"));
+    }
+
+    #[test]
+    fn calendar_date_shaped_tokens_are_skipped() {
+        assert!(lint_line(1, "released on 2024.01.05 to everyone").is_empty());
+    }
+
+    #[test]
+    fn calendar_date_with_trailing_build_number_is_skipped() {
+        assert!(lint_line(1, "shipped as 2024.01.05.1 today").is_empty());
+    }
+
+    #[test]
+    fn out_of_range_month_is_not_treated_as_a_date() {
+        // Month 13 can't be a date, so this is checked as a version core
+        // and rejected for the leading zero.
+        let findings = lint_line(1, "bumped to 2024.13.05 today");
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("leading zero"));
     }
 
     #[test]
