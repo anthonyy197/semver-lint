@@ -26,8 +26,21 @@ $ cat versions.txt | semver-lint -
 <stdin>:4:1: non-numeric identifier in version core 'x' (1.x.0)
 ```
 
-Exit codes: `0` if no findings, `1` if findings were reported, `2` on a
-usage or I/O error (bad path, unreadable file).
+Multiple files can be given in one invocation; each finding is prefixed
+with the path it came from:
+
+```
+$ semver-lint CHANGELOG.md package.json
+CHANGELOG.md:12:11: leading zero in numeric identifier '02' (1.02.0)
+package.json:3:14: missing patch version (1.2)
+```
+
+Files are checked in order and a bad path doesn't stop the rest - it's
+reported to stderr and the linter moves on to the next file.
+
+Exit codes: `0` if no findings, `1` if findings were reported, `2` if any
+file couldn't be opened or read. If both a finding and an I/O error occur
+across the run, `2` takes priority.
 
 ## How it decides what to check
 
